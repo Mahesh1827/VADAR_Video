@@ -1,0 +1,51 @@
+# VADAR Video Analysis Extension — Walkthrough
+
+## Summary
+
+Extended VADAR from image-only analysis to **video analysis** by unlocking SAM 2's Video Predictor and adding a complete video processing pipeline. All existing image functionality remains untouched.
+
+## Files Changed
+
+### New Files
+
+| File | Purpose |
+|---|---|
+| [video_utils.py](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_utils.py) | Frame extraction, video metadata, chunked processing, frame loading, mask→bbox conversion |
+| [video_engine.py](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_engine.py) | [VideoEngine](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_engine.py#32-376) class — extracts frames, provides `video_dir`/[frame_count](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_utils.py#169-181)/`fps` to LLM-generated programs |
+
+### Modified Files
+
+| File | What Changed |
+|---|---|
+| [predefined_modules.py](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py) | Added `SAM2VideoPredictor` import + 6 new classes: [VideoTrackModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#722-838), [VideoLocateModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#840-878), [VideoVQAModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#880-923), [VideoGetFrameModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#925-949), [VideoResultModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#951-962), [VideoModulesList](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#964-1089) |
+| [modules.py](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/prompts/modules.py) | Added `VIDEO_MODULES_SIGNATURES` — API docstrings for [get_frame](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_utils.py#169-181), `track`, `loc_frame`, `vqa_frame`, [result](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/demo-notebook/notebook_imports.py#598-605) |
+| [program_prompt.py](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/prompts/program_prompt.py) | Added `VIDEO_PROGRAM_PROMPT` — 5 few-shot examples teaching the LLM to write video analysis programs |
+
+## Architecture
+
+```mermaid
+graph TD
+    V["Video File"] --> FE["extract_frames()"]
+    FE --> FD["JPEG Frames Directory"]
+    FD --> VE["VideoEngine"]
+    VE --> NS["Namespace: video_dir, frame_count, fps"]
+    NS --> LLM["LLM generates Python program"]
+    LLM --> PRG["Program calls video modules"]
+    PRG --> TRK["track() → SAM2VideoPredictor"]
+    PRG --> LOC["loc_frame() → GroundingDINO"]
+    PRG --> VQA["vqa_frame() → GPT-4o"]
+    PRG --> GF["get_frame() → PIL Image"]
+    PRG --> RES["result() → final answer"]
+```
+
+## Key Design Decisions
+
+1. **SAM 2 Video Predictor** is initialized via [VideoModulesList](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#964-1089) using the same checkpoint as image mode, just wrapped in `SAM2VideoPredictor` instead of `SAM2ImagePredictor`
+2. **Auto-chunking**: `VideoModulesList._auto_chunk_size()` detects GPU VRAM and sets chunk size accordingly (None for ≥24GB, 100 for 16GB, 50 for 8GB)
+3. **Video modules delegate** to existing image modules — [VideoLocateModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#840-878) wraps [LocateModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#57-215), [VideoVQAModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#880-923) wraps [VQAModule](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/predefined_modules.py#216-356)
+4. **LLM receives video-specific variables** (`video_dir`, [frame_count](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/video_utils.py#169-181), `fps`) instead of a single [image](file:///c:/Users/mahesh/Documents/Mahesh/AI/VADAR/engine/engine_utils.py#153-161)
+
+## What's Left
+
+- Demo notebook for interactive testing
+- End-to-end verification with a sample video (requires GPU + model weights)

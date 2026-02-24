@@ -119,3 +119,70 @@ Returns:
 \"\"\"
 def same_object(image, x_1, y_1, x_2, y_2):
 """
+
+VIDEO_MODULES_SIGNATURES = """
+\"\"\"
+Loads a specific frame from the video as a PIL Image.
+
+Args:
+    video_dir (string): Path to directory of extracted video frames.
+    frame_index (int): 0-based index of the frame to load.
+
+Returns:
+    image: The frame as a PIL Image.
+\"\"\"
+def get_frame(video_dir, frame_index):
+
+\"\"\"
+Tracks an object across video frames starting from a point on an initial frame.
+Returns a dictionary mapping frame indices to bounding boxes for every frame where the object is visible.
+
+Args:
+    video_dir (string): Path to directory of extracted video frames.
+    init_frame_index (int): Frame index where the object is first identified.
+    x (int): X coordinate of the object in the initial frame (pixel space).
+    y (int): Y coordinate of the object in the initial frame (pixel space).
+
+Returns:
+    dict: {frame_index (int): [x1, y1, x2, y2]} bounding boxes per frame where the object is visible.
+\"\"\"
+def track(video_dir, init_frame_index, x, y):
+
+\"\"\"
+Locates objects in a specific video frame. Object prompts should be simple and contain few words.
+
+Args:
+    video_dir (string): Path to directory of extracted video frames.
+    frame_index (int): Frame index to search.
+    object_prompt (string): Description of object to locate.
+
+Returns:
+    list: A list of bounding boxes [xmin, ymin, xmax, ymax] for all of the objects located in pixel space.
+\"\"\"
+def loc_frame(video_dir, frame_index, object_prompt):
+
+\"\"\"
+Answers a question about an object in a specific video frame.
+
+Args:
+    video_dir (string): Path to directory of extracted video frames.
+    frame_index (int): Frame index to analyze.
+    question (string): Question about the object.
+    bbox (list): A bounding box [xmin, ymin, xmax, ymax] containing the object. Pass None for holistic questions about the whole frame.
+
+Returns:
+    string: Answer to the question.
+\"\"\"
+def vqa_frame(video_dir, frame_index, question, bbox):
+
+\"\"\"
+Returns the final result. Must be called at the end of every program.
+
+Args:
+    var: The final answer.
+
+Returns:
+    string: The final result as a string.
+\"\"\"
+def result(var):
+"""

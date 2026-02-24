@@ -1,0 +1,143 @@
+VADAR Implementation & Usage Guide
+This guide explains how to implement (set up and run) the VADAR system from scratch, assuming you have the source code. It covers the architecture, Windows-specific setup instructions, and execution steps.
+
+1. System Architecture Overview
+VADAR is a Visual Question Answering (VQA) system that uses a chain of LLM-based agents to generate code and execute it.
+
+The pipeline consists of three main stages, orchestrated by 
+evaluate.py
+:
+
+Signature Generation (
+SignatureAgent
+):
+
+Goal: Define the API (functions) needed to answer the questions.
+Input: A batch of questions.
+Output: Function signatures and docstrings (e.g., def count_objects(image, object_name): ...).
+Code: 
+agents/agents.py
+ -> 
+SignatureAgent
+.
+API Implementation (
+APIAgent
+):
+
+Goal: Write the Python code for the functions defined in step 1.
+Input: Signatures and docstrings.
+Output: Executable Python code for each function.
+Code: 
+agents/agents.py
+ -> 
+APIAgent
+.
+Program Generation (
+ProgramAgent
+):
+
+Goal: Solve specific questions by calling the generated API functions.
+Input: A question and the prepared API.
+Output: A "program" (sequence of function calls) that solves the question.
+Code: 
+agents/agents.py
+ -> 
+ProgramAgent
+.
+Execution (
+Engine
+):
+
+Goal: Run the generated program against the image to get the final answer.
+Input: The program and the image.
+Output: Final answer (Boolean, Count, String, etc.).
+Code: 
+engine/engine.py
+.
+2. Windows Setup Instructions
+Since you are running on Windows, you cannot run 
+setup.sh
+ directly. Follow these manual steps to install dependencies.
+
+Prerequisites
+Python 3.10+ (Recommended)
+CUDA Toolkit (If you have an NVIDIA GPU)
+C++ Build Tools (Required for compiling dependencies like sam2 and GroundingDINO. Install "Desktop development with C++" via Visual Studio Installer).
+OpenAI API Key
+Step-by-Step Installation
+Create and Activate a Virtual Environment:
+
+powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+Install Base Dependencies:
+
+powershell
+pip install -r requirements.txt
+Install PyTorch with CUDA Support (Adjust version if needed):
+
+powershell
+pip install torch==2.2.0 torchvision==0.17.0 xformers==0.0.24 --index-url https://download.pytorch.org/whl/cu122
+Install Custom Models (These must be installed from source):
+
+Create a models directory if it doesn't exist:
+
+powershell
+mkdir models
+cd models
+Segment Anything 2 (SAM2):
+
+powershell
+git clone https://github.com/facebookresearch/sam2.git
+cd sam2
+pip install -e .
+cd checkpoints
+./download_ckpts.sh # You might need to run the commands inside this script manually if .sh fails
+# Manual download if script fails:
+# Invoke-WebRequest -Uri "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt" -OutFile "sam2_hiera_large.pt"
+# (Repeat for other checkpoints in the script)
+cd ..\..
+UniDepth:
+
+powershell
+git clone https://github.com/lpiccinelli-eth/UniDepth.git
+cd UniDepth
+pip install -e .
+cd ..
+GroundingDINO:
+
+powershell
+git clone https://github.com/IDEA-Research/GroundingDINO.git
+cd GroundingDINO
+pip install -e .
+mkdir weights
+cd weights
+Invoke-WebRequest -Uri "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth" -OutFile "groundingdino_swint_ogc.pth"
+cd ..\..\..
+Setup Data: Run the setup script to download datasets (CLEVR, Omni3D):
+
+powershell
+python setup_data.py
+API Key: Create a file named api.key in the root directory and paste your OpenAI API key into it.
+
+powershell
+# Example content of api.key
+sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx
+3. Running the System
+To run the full evaluation pipeline, use 
+evaluate.py
+.
+
+powershell
+python evaluate.py --dataset omni3d --num-questions 5
+Key Arguments:
+--dataset: clevr or omni3d (Default: omni3d).
+--num-questions: Number of questions to process (Default: -1 for all).
+--num-api-questions: Number of questions used to generate the API (Default: 10).
+--results-pth: Directory to save results (Default: 
+results/
+).
+4. Troubleshooting
+Import Errors: Run python verify_setup.py to identify missing packages.
+Build Errors: Ensure you have Visual Studio Build Tools installed (needed for pip install -e . on Windows).
+path/to/file errors: Ensure you are running commands from the root directory (VADAR).

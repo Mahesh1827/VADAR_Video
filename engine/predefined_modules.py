@@ -11,6 +11,7 @@ from transformers import (
 
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.sam2_video_predictor import SAM2VideoPredictor
 from unidepth.models import UniDepthV2
 import groundingdino.datasets.transforms as T
 
@@ -712,3 +713,376 @@ class ModulesList:
         for module in self.modules:
             if hasattr(module, "set_oracle"):
                 module.clear_oracle()
+
+
+# =============================================================================
+# VIDEO MODE MODULES
+# =============================================================================
+
+class VideoTrackModule(PredefinedModule):
+    """
+    Track an object across video frames using SAM 2 Video Predictor.
+
+    Given an initial point or bbox on a specific frame, propagates the mask
+    forward and backward through the video, returning per-frame bounding boxes.
+    """
+
+    def __init__(self, sam2_video_predictor, device, chunk_size=None, trace_path=None):
+        super().__init__("track", trace_path)
+        self.predictor = sam2_video_predictor
+        self.device = device
+        self.chunk_size = chunk_size  # None = process all frames at once
+
+    def execute(self, video_dir, init_frame_idx, x, y):
+        """
+        Track an object from an initial point across all frames.
+
+        Args:
+            video_dir (str): Path to directory of extracted JPEG frames.
+            init_frame_idx (int): Frame index where the object is identified.
+            x (int): X coordinate of the object in the initial frame.
+            y (int): Y coordinate of the object in the initial frame.
+
+        Returns:
+            dict: {frame_idx (int): [x1, y1, x2, y2]} bounding boxes per frame.
+        """
+        from .video_utils import bbox_from_mask, get_frame_count, chunk_frame_indices
+
+        total_frames = get_frame_count(video_dir)
+        all_bboxes = {}
+
+        if self.chunk_size and total_frames > self.chunk_size:
+            chunks = chunk_frame_indices(total_frames, self.chunk_size)
+        else:
+            chunks = [(0, total_frames - 1)]
+
+        for chunk_start, chunk_end in chunks:
+            # Only process chunks that contain our init frame or are after it
+            # SAM2 propagates forward from the init frame
+            if chunk_end < init_frame_idx:
+                continue
+
+            # Adjust init frame index for this chunk
+            local_init = max(0, init_frame_idx - chunk_start)
+
+            with torch.inference_mode():
+                state = self.predictor.init_state(video_path=video_dir)
+
+                # Add the point prompt on the init frame
+                frame_idx_in_video = init_frame_idx
+                _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                    inference_state=state,
+                    frame_idx=frame_idx_in_video,
+                    obj_id=1,
+                    points=np.array([[x, y]], dtype=np.float32),
+                    labels=np.array([1], dtype=np.int32),
+                )
+
+                # Propagate through all frames
+                for frame_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(state):
+                    mask = (mask_logits[0] > 0.0).cpu().numpy().squeeze()
+                    bbox = bbox_from_mask(mask)
+                    if bbox is not None:
+                        all_bboxes[frame_idx] = bbox
+
+                self.predictor.reset_state(state)
+
+        # Trace
+        self.write_trace(f"<p>Track object from frame {init_frame_idx} at ({x}, {y})</p>")
+        self.write_trace(f"<p>Tracked across {len(all_bboxes)} of {total_frames} frames</p>")
+
+        return all_bboxes
+
+    def execute_with_bbox(self, video_dir, init_frame_idx, bbox):
+        """
+        Track an object from an initial bounding box across all frames.
+
+        Args:
+            video_dir (str): Path to directory of extracted JPEG frames.
+            init_frame_idx (int): Frame index where the object is identified.
+            bbox (list): Bounding box [x1, y1, x2, y2] of the object.
+
+        Returns:
+            dict: {frame_idx (int): [x1, y1, x2, y2]} bounding boxes per frame.
+        """
+        from .video_utils import bbox_from_mask, get_frame_count
+
+        total_frames = get_frame_count(video_dir)
+        all_bboxes = {}
+
+        with torch.inference_mode():
+            state = self.predictor.init_state(video_path=video_dir)
+
+            # Add the box prompt on the init frame
+            _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                inference_state=state,
+                frame_idx=init_frame_idx,
+                obj_id=1,
+                box=np.array(bbox, dtype=np.float32),
+            )
+
+            # Propagate through all frames
+            for frame_idx, obj_ids, mask_logits in self.predictor.propagate_in_video(state):
+                mask = (mask_logits[0] > 0.0).cpu().numpy().squeeze()
+                bbox_result = bbox_from_mask(mask)
+                if bbox_result is not None:
+                    all_bboxes[frame_idx] = bbox_result
+
+            self.predictor.reset_state(state)
+
+        # Trace
+        self.write_trace(f"<p>Track object from frame {init_frame_idx} with bbox {bbox}</p>")
+        self.write_trace(f"<p>Tracked across {len(all_bboxes)} of {total_frames} frames</p>")
+
+        return all_bboxes
+
+
+class VideoLocateModule(PredefinedModule):
+    """
+    Locate objects in a specific video frame.
+
+    Delegates to the existing LocateModule by loading the requested frame
+    and running detection on it.
+    """
+
+    def __init__(self, locate_module, trace_path=None):
+        super().__init__("loc_frame", trace_path)
+        self.locate_module = locate_module
+
+    def execute(self, video_dir, frame_index, object_prompt):
+        """
+        Locate objects in a specific frame of the video.
+
+        Args:
+            video_dir (str): Path to directory of extracted JPEG frames.
+            frame_index (int): Frame index to search.
+            object_prompt (str): Description of object to locate.
+
+        Returns:
+            list: Bounding boxes [xmin, ymin, xmax, ymax] for located objects.
+        """
+        from .video_utils import load_frame
+
+        frame = load_frame(video_dir, frame_index)
+
+        # Delegate to the existing locate module's bboxs method
+        if hasattr(self.locate_module, 'execute_bboxs'):
+            result = self.locate_module.execute_bboxs(frame, object_prompt)
+        else:
+            result = self.locate_module.execute_pts(frame, object_prompt)
+
+        self.write_trace(f"<p>Locate in frame {frame_index}: {object_prompt}</p>")
+        self.write_trace(f"<p>Found {len(result)} objects</p>")
+
+        return result
+
+
+class VideoVQAModule(PredefinedModule):
+    """
+    Answer visual questions about objects in a specific video frame.
+
+    Delegates to the existing VQAModule by loading the requested frame.
+    """
+
+    def __init__(self, vqa_module, trace_path=None):
+        super().__init__("vqa_frame", trace_path)
+        self.vqa_module = vqa_module
+
+    def execute(self, video_dir, frame_index, question, bbox=None):
+        """
+        Answer a question about an object in a specific video frame.
+
+        Args:
+            video_dir (str): Path to directory of extracted JPEG frames.
+            frame_index (int): Frame index to analyze.
+            question (str): Question about the object.
+            bbox (list, optional): Bounding box [xmin, ymin, xmax, ymax].
+
+        Returns:
+            str: Answer to the question.
+        """
+        from .video_utils import load_frame
+
+        frame = load_frame(video_dir, frame_index)
+
+        if bbox is not None:
+            if hasattr(self.vqa_module, 'execute_bboxs'):
+                answer = self.vqa_module.execute_bboxs(frame, question, bbox)
+            else:
+                # Use center of bbox as point
+                cx = (bbox[0] + bbox[2]) // 2
+                cy = (bbox[1] + bbox[3]) // 2
+                answer = self.vqa_module.execute_pts(frame, question, cx, cy)
+        else:
+            answer = self.vqa_module.predict(frame, question, holistic=True)
+
+        self.write_trace(f"<p>VQA on frame {frame_index}: {question}</p>")
+        self.write_trace(f"<p>Answer: {answer}</p>")
+
+        return answer
+
+
+class VideoGetFrameModule(PredefinedModule):
+    """
+    Load a specific frame from the extracted video frames directory.
+    """
+
+    def __init__(self, trace_path=None):
+        super().__init__("get_frame", trace_path)
+
+    def execute(self, video_dir, frame_index):
+        """
+        Load a frame as a PIL Image.
+
+        Args:
+            video_dir (str): Path to directory of extracted JPEG frames.
+            frame_index (int): Zero-based index of the frame to load.
+
+        Returns:
+            PIL.Image: The frame as an RGB Image.
+        """
+        from .video_utils import load_frame
+
+        frame = load_frame(video_dir, frame_index)
+        self.write_trace(f"<p>Loaded frame {frame_index}</p>")
+        return frame
+
+
+class VideoResultModule(PredefinedModule):
+    """
+    Return the final result from a video analysis program.
+    """
+
+    def __init__(self, trace_path=None):
+        super().__init__("result", trace_path)
+
+    def execute(self, var):
+        self.write_trace(f"<p>Result: {var}</p>")
+        return str(var)
+
+
+class VideoModulesList:
+    """
+    Initializes and manages video-mode modules.
+
+    Uses SAM2VideoPredictor for object tracking across frames,
+    alongside GroundingDINO/Molmo for per-frame detection and
+    GPT-4o for visual question answering.
+    """
+
+    def __init__(self, models_path=None, trace_path=None, dataset="omni3d",
+                 api_key_path="./api.key", chunk_size=None):
+        """
+        Args:
+            models_path (str): Path to model weights directory.
+            trace_path (str): Path for execution trace HTML file.
+            dataset (str): Dataset type ('clevr', 'gqa', or 'omni3d').
+            api_key_path (str): Path to OpenAI API key file.
+            chunk_size (int, optional): Max frames to process at once.
+                If None, auto-detects based on available VRAM.
+        """
+        set_devices()
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dataset = dataset
+
+        # Auto-detect chunk size from VRAM if not specified
+        if chunk_size is None:
+            self.chunk_size = self._auto_chunk_size()
+        else:
+            self.chunk_size = chunk_size
+
+        # Initialize SAM 2 in VIDEO mode
+        self.sam2_checkpoint = f"{models_path}/sam2/checkpoints/sam2.1_hiera_base_plus.pt"
+        self.sam2_model_cfg = "configs/sam2.1/sam2.1_hiera_b+.yaml"
+        self.sam2_video_predictor = SAM2VideoPredictor(
+            build_sam2(self.sam2_model_cfg, self.sam2_checkpoint, device=self.device)
+        )
+        print("SAM2 Video Predictor Initialized")
+
+        # Initialize object detection (same as image mode)
+        if dataset in ["clevr", "gqa"]:
+            self.molmo_processor = AutoProcessor.from_pretrained(
+                "allenai/Molmo-7B-D-0924",
+                trust_remote_code=True,
+                torch_dtype="auto",
+                device_map="auto",
+            )
+            self.molmo_model = AutoModelForCausalLM.from_pretrained(
+                "allenai/Molmo-7B-D-0924",
+                trust_remote_code=True,
+                torch_dtype="auto",
+                device_map="auto",
+            )
+            print("Molmo Initialized")
+            self._locate_module = LocateModule(
+                dataset=dataset,
+                molmo_processor=self.molmo_processor,
+                molmo_model=self.molmo_model,
+                trace_path=trace_path,
+            )
+        else:
+            from groundingdino.util.inference import load_model as load_gd_model
+            self.grounding_dino = load_gd_model(
+                f"{models_path}/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                f"{models_path}/GroundingDINO/weights/groundingdino_swint_ogc.pth",
+            )
+            print("GroundingDINO Initialized")
+            self._locate_module = LocateModule(
+                dataset=dataset,
+                grounding_dino=self.grounding_dino,
+                trace_path=trace_path,
+            )
+
+        # Initialize VQA (reuse existing VQAModule)
+        self._vqa_module = VQAModule(
+            dataset=dataset,
+            trace_path=trace_path,
+            api_key_path=api_key_path,
+        )
+
+        # Build video module list
+        self.modules = self._get_video_modules(trace_path)
+        self.module_names = [module.name for module in self.modules]
+        self.module_executes = {
+            name: module.execute for name, module in zip(self.module_names, self.modules)
+        }
+
+    def _auto_chunk_size(self):
+        """Auto-detect chunk size based on available GPU VRAM."""
+        if not torch.cuda.is_available():
+            return 20  # CPU: very conservative
+
+        vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+        if vram_gb >= 24:
+            return None  # No chunking needed
+        elif vram_gb >= 16:
+            return 100
+        elif vram_gb >= 8:
+            return 50
+        else:
+            return 20
+
+    def _get_video_modules(self, trace_path):
+        """Create the list of video-mode modules."""
+        return [
+            VideoTrackModule(
+                sam2_video_predictor=self.sam2_video_predictor,
+                device=self.device,
+                chunk_size=self.chunk_size,
+                trace_path=trace_path,
+            ),
+            VideoLocateModule(
+                locate_module=self._locate_module,
+                trace_path=trace_path,
+            ),
+            VideoVQAModule(
+                vqa_module=self._vqa_module,
+                trace_path=trace_path,
+            ),
+            VideoGetFrameModule(trace_path=trace_path),
+            VideoResultModule(trace_path=trace_path),
+        ]
+
+    def set_trace_path(self, trace_path):
+        for module in self.modules:
+            module.trace_path = trace_path

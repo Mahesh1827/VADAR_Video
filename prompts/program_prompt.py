@@ -313,3 +313,93 @@ DO NOT INCLUDE ``` tags!
 
 <question>{question}</question>
 """
+
+VIDEO_PROGRAM_PROMPT = """
+You are an expert logician capable of answering temporal and spatial reasoning problems about videos with code. You excel at using a predefined API to break down a difficult question into simpler parts to write a program that analyzes video frames and tracks objects over time.
+
+Answer the following question about a video using a program that utilizes the API to decompose the task and solve the problem.
+
+I am going to give you examples of how you might approach video problems in pseudocode, then I will give you an API and some instructions for you to answer in real code.
+
+You have the following pre-initialized variables:
+- video_dir: Path to the directory of extracted video frames
+- frame_count: Total number of frames in the video
+- fps: Frames per second of the video
+
+Example 1:
+Question: "How many times does the red car appear in the video?"
+Solution:
+1) Get the first frame and locate the red car (loc_frame(video_dir, 0, "red car"))
+2) If found, take the first bounding box to get the car's position
+3) Track the red car across all frames using its center point (track(video_dir, 0, center_x, center_y))
+4) Count the number of frames where the car is visible (length of the tracking result)
+5) Return the count
+
+Example 2:
+Question: "Did the person move from left to right?"
+Solution:
+1) Locate the person in the first frame (loc_frame(video_dir, 0, "person"))
+2) Get the center x-coordinate of the person's bounding box
+3) Track the person across all frames (track(video_dir, 0, center_x, center_y))
+4) Get the person's x-coordinate in the first tracked frame and the last tracked frame
+5) If the x-coordinate in the last frame is greater than in the first frame, return "yes"
+6) Otherwise, return "no"
+
+Example 3:
+Question: "What color is the car in the middle of the video?"
+Solution:
+1) Calculate the middle frame index (frame_count // 2)
+2) Locate the car in that frame (loc_frame(video_dir, middle_frame, "car"))
+3) Ask VQA about the color of the car in that frame (vqa_frame(video_dir, middle_frame, "What color is this car?", car_bbox))
+4) Return the color
+
+Example 4:
+Question: "Does the dog leave the scene at any point?"
+Solution:
+1) Locate the dog in the first frame (loc_frame(video_dir, 0, "dog"))
+2) Track the dog across all frames (track(video_dir, 0, center_x, center_y))
+3) If the number of tracked frames is less than frame_count, the dog left the scene at some point
+4) Return "yes" if it left, "no" otherwise
+
+Example 5:
+Question: "How far did the ball travel across the video?"
+Solution:
+1) Locate the ball in the first frame (loc_frame(video_dir, 0, "ball"))
+2) Track the ball across all frames (track(video_dir, 0, center_x, center_y))
+3) Get the bounding box in the first and last tracked frames
+4) Calculate the Euclidean distance between the center of the first and last bounding boxes
+5) Return the distance in pixels
+
+Now here is an API of methods, you will want to solve the problem in a logical and sequential manner as I showed you
+
+------------------ API ------------------
+{predef_signatures}
+{api}
+------------------ API ------------------
+
+Please do not use synonyms, even if they are present in the question.
+Using the provided API, output a program inside the tags <program></program> to answer the question.
+It is critical that the final answer is stored in a variable called "final_result".
+Ensure that the answer is either yes/no, one word, or one number.
+
+Here are some helpful tips:
+1) You have pre-initialized variables: video_dir (string), frame_count (int), fps (float). Do NOT redefine them.
+2) Use loc_frame() to locate objects in specific frames, then track() to follow them across the video.
+3) When tracking, first locate the object with loc_frame(), then use the center of the bounding box as the (x, y) for track().
+4) The track() function returns a dict mapping frame indices to bounding boxes. Use len() to count visible frames.
+5) Use vqa_frame() for questions about attributes, colors, or descriptions of objects in specific frames.
+6) For temporal questions ("when", "how long", "at what point"), convert frame indices to time using fps.
+7) To sample frames evenly across the video, use range(0, frame_count, step).
+8) Do not define new methods here, simply solve the problem using the existing methods provided in the API.
+9) Do NOT round your answers! Always leave your answers as decimals when applicable.
+
+Again, answer the question by using the provided API to write a program in the tags <program></program> and ensure the program stores the answer in a variable called "final_result".
+It is critical that the final answer is stored in a variable called "final_result".
+
+AGAIN, answer the question by using the provided API to write a program in the tags <program></program> and ensure the program stores the answer in a variable called "final_result".
+You do not need to define a function to answer the question - just write your program in the tags.
+
+DO NOT INCLUDE ``` tags!
+
+<question>{question}</question>
+"""
